@@ -1,30 +1,62 @@
 from dotenv import load_dotenv
-from langchain_mistralai import ChatMistralAI
-from langchain_community.document_loaders import TextLoader,PyPDFLoader
+from langchain_mistralai import ChatMistralAI,MistralAIEmbeddings
+from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 load_dotenv()
 
-data=PyPDFLoader("DeepLearning.pdf")
-docs=data.load()
+embedding_model=MistralAIEmbeddings()
 
-splitter=RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=100
+vectorstore=Chroma(
+    persist_directory="chroma_db",
+    embedding_function=embedding_model
 )
 
-chunks=splitter.split_documents(docs)
-
-template=ChatPromptTemplate.from_messages(
-    [("system","you are a AI that summerizes the text"),("human","{data}")]
+retriver=vectorstore.as_retriever(
+    search_type="mmr",
+    search_kwargs={
+        "k":4,
+        "fetch_k":10,
+        "lambda_mult":0.5
+    }
 )
 
-prompt=template.invoke({
-    "data": docs
-})
+llm=ChatMistralAI(model="mistal-small-2506")
 
-model=ChatMistralAI(model="mistral-small-2506")
+prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a helpful AI assistant. Use ONLY the provided context to answer the question.
 
-res=model.invoke(prompt)
-print(res.content)
+If the answer is not present in the context, say:
+"I could not find the answer in the document."
+
+Context:
+{context}
+""",
+        ),
+        ("human", "{question}"),
+    ]
+)
+
+print("Rag system created.")
+print("press 0 to exit")
+
+while True:
+    query=input("You:")
+    if query==0:
+        break
+
+    docs=retriver.invoke(query)
+    context="\n\n".join(
+        [doc.page_content for doc in docs]
+    )
+
+    final_prompt=prompt.invoke({
+        "context":context,
+        "question":query
+    })
+
+    res=llm.invoke(final_prompt)
+    print(f"\n AI:{res.content}")
